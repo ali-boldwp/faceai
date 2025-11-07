@@ -6,9 +6,7 @@ def distance(p1, p2):
     return math.hypot(p1[0] - p2[0], p1[1] - p2[1])
 
 def all_measurements(landmarks):
-    print("landmarks" , landmarks)
     try:
-        # MediaPipe landmark index mapping
         return {
             "forehead_width": distance(landmarks[70], landmarks[300]),  # approx lateral forehead
             "jaw_width": distance(landmarks[234], landmarks[454]),      # Go-Go

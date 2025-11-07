@@ -1,203 +1,128 @@
-from dataclasses import dataclass
-from typing import Dict, Tuple, Optional, List
-
 from app.services.measurements import all_measurements
 
+def approx_equal(x, y, tol=0.1):
+    return abs(x - y) / max(x, y) < tol if x and y else False
 
-def safe_ratio(num: float, den: float, default: float = 0.0) -> float:
-    if not num or not den or den == 0:
-        return default
-    return num / den
+def approx(x, y, tol=0.1):
+    return abs(x - y) / max(x, y) < tol if x and y else False
 
-def between(x: float, lo: float, hi: float) -> bool:
-    return lo <= x <= hi
+def classify_face_type(a, b, c, d):
+    jaw = 2 * d
 
-def approx1(x: float, tol: float = 0.12) -> bool:
-    """True if x is within ±tol of 1.0 (relative)."""
-    return (1.0 - tol) <= x <= (1.0 + tol)
+    print(f"[DEBUG] Shape check → a={a}, c={c}, jaw={jaw}, b={b}")
+    print("🚨 Using latest face classification logic")
 
-@dataclass
-class FaceMetrics:
-    a: float; b: float; c: float; d: float
+    # --- Square: all widths are similar, face not too long ---
+    # --- Square: all widths similar, not long
+    if (
+            approx(a, c, 0.2) and
+            approx(c, jaw, 0.15) and
+            abs(b - c) < 70
+    ):
+        return ("Square", "Pătrată / Coleric – Pământ", "Long teardrops, oversized hoops, chandeliers.")
 
-    @property
-    def R_hw(self) -> float: 
-        return safe_ratio(self.b, self.c)
+    # --- Rectangular: like square, but longer face ---
+    if (
+        approx(a, c, 0.12) and
+        approx(c, jaw, 0.12) and
+        b > c * 1.15
+    ):
+        return ("Rectangular", "Dreptunghiulară / Sangvin – Marte", "Small studs, round buttons, teardrops, hoops.")
 
-    @property
-    def R_fc(self) -> float:  # forehead-to-cheekbone
-        return safe_ratio(self.a, self.c)
+    # --- Diamond ---
+    if (
+        c > a * 1.25 and
+        c > jaw * 1.25 and
+        b > c * 1.15
+    ):
+        return ("Diamond", "Diamant", "Small hoops, studs, small drop earrings.")
 
-    @property
-    def R_jc(self) -> float:  # jaw-to-cheekbone
-        return safe_ratio(self.d, self.c)
+    # --- Heart ---
+    if (
+            c > jaw * 1.15 and  # Cheekbones clearly dominant
+            b > c * 1.05 and  # Face longer than cheekbones
+            a > c * 0.55 and a < c * 0.95  # Balanced forehead
+    ):
+        return ("Heart", "Inimă / Sangvin – Venus", "Triangulars, chandeliers, teardrops. Avoid tiny studs.")
 
-    @property
-    def R_fj(self) -> float:  # forehead-to-jaw
-        return safe_ratio(self.a, self.d)
+    # --- Triangle ---
+    if jaw > c * 1.1 and c > a:
+        return ("Triangle", "Triunghiulară / Nervos – Mercur", "Large ovals, small circles, curved bottoms.")
 
-    def as_dict(self) -> Dict[str, float]:
-        return dict(
-            a=self.a, b=self.b, c=self.c, d=self.d,
-            R_hw=self.R_hw, R_fc=self.R_fc, R_jc=self.R_jc, R_fj=self.R_fj
-        )
+    # --- Oval ---
+    if b > c * 1.3 and a < c and jaw < c:
+        return ("Oval", "Ovală / Sangvin – Soare", "Any style of earrings will go.")
 
-def _validate(m: FaceMetrics) -> Optional[str]:
-    if any(v is None for v in (m.a, m.b, m.c, m.d)):
-        return "Missing key facial dimensions (forehead, height, cheekbone, or jaw)."
-    if any(v <= 0 for v in (m.a, m.b, m.c, m.d)):
-        return "Non-positive measurement encountered. Ensure all lengths are > 0."
-    return None
+    # --- Oblong ---
+    if b > a * 1.4 and approx(a, c, 0.1) and approx(c, jaw, 0.1):
+        return ("Oblong", "Alungită / Limfatic – Neptun", "Hoops, round studs, classy rounded shapes.")
 
+    # --- Round ---
+    if abs(c - b) < 25 and approx(a, jaw, 0.15) and c > a and b > a:
+        return ("Round", "Rotundă / Limfatic – Lună", "Long earrings, rectangles, long ovals. Avoid hoops.")
 
-PRIMARY_SHAPES = [
-    "Round Face", "Oval Face", "Oblong (Long) Face", "Triangular Face",
-    "Heart-Shaped Face", "Square Face", "Rectangular Face", "Diamond Face",
-    "Upward Trapezoid Face", "Downward Trapezoid Face"
-]
-ATTR_WIDE = "Wide Face"
-ATTR_NARROW = "Narrow Face"
+    # --- Fallback ---
+    if max(a, c, jaw) - min(a, c, jaw) < 100 and abs(b - c) < 100:
+        return ("Square", "Pătrată / Coleric – Pământ", "Long teardrops, oversized hoops, chandeliers.")
 
-def classify_face_shape(
-    landmarks_or_measurements,
-    measurements: Optional[Dict[str, float]] = None,
-    treat_width_attributes_as_primary: bool = False
-) -> Tuple[str, str, Dict[str, float], List[str]]:
-    """
-    Returns: (primary_shape, justification, debug_ratios, attributes)
-    attributes may include: 'Wide Face', 'Narrow Face'
-    Set `treat_width_attributes_as_primary=True` to output those as primary instead.
-    """
-    # Ingest measurements
+    return ("Unknown", "Necunoscut / A se verifica", "No recommendation.")
+
+def classify_face_shape(landmarks, measurements=None):
     if measurements is None:
-        # Assume raw landmarks were passed
-        mvals = all_measurements(landmarks_or_measurements)
-        a = mvals.get("forehead_width")
-        b = mvals.get("face_height")
-        c = mvals.get("cheekbone_width")
-        d = mvals.get("jaw_width")
-    else:
-        # Assume dict with numeric values
-        a = measurements.get("forehead_width") or measurements.get("a")
-        b = measurements.get("face_height") or measurements.get("b")
-        c = measurements.get("cheekbone_width") or measurements.get("c")
-        d = measurements.get("jaw_width") or measurements.get("d")
+        measurements = all_measurements(landmarks)
 
-    met = FaceMetrics(a, b, c, d)
-    err = _validate(met)
-    if err:
-        return "Undefined", err, met.as_dict(), []
+    a = measurements.get("forehead_width")     # a
+    b = measurements.get("face_height")        # b
+    c = measurements.get("cheekbone_width")    # c
+    d = measurements.get("jaw_width")          # d
 
-    R_hw, R_fc, R_jc, R_fj = met.R_hw, met.R_fc, met.R_jc, met.R_fj
-    debug = met.as_dict()
+    if None in (a, b, c, d):
+        return "Undefined", "Missing key facial dimensions (forehead, height, cheekbone, or jaw)."
 
-    # Width attributes (relative width vs height via cheekbone proxy)
-    attributes: List[str] = []
-    # Wide if width close to or exceeding height; Narrow if quite long
-    if R_hw <= 1.02:      # b/c <= 1.02 → “wide” impression
-        attributes.append(ATTR_WIDE)
-    elif R_hw >= 1.45:    # b/c >= 1.45 → “narrow/long” impression
-        attributes.append(ATTR_NARROW)
+    shape = None
+    justification = ""
 
-
-    if (R_fc <= 0.90) and (R_jc <= 0.90) and (R_hw >= 1.05):
-        shape = "Diamond Face"
-        why = f"Cheekbones dominate (a/c={R_fc:.2f}≤0.90, d/c={R_jc:.2f}≤0.90) with slight length (b/c={R_hw:.2f}≥1.05)."
-
-    elif (R_fj >= 1.15) and (R_fc >= 1.00) and (R_jc <= 0.92) and (R_hw >= 1.05):
-        shape = "Heart-Shaped Face"
-        why = f"Forehead > jaw (a/d={R_fj:.2f}≥1.15), jaw tapers (d/c={R_jc:.2f}≤0.92), modest length (b/c={R_hw:.2f})."
-
-    elif (R_fj <= 0.87) and (R_jc >= 1.00) and (R_hw >= 1.02):
-        shape = "Triangular Face"
-        why = f"Jaw wider than forehead (a/d={R_fj:.2f}≤0.87) and ≳ cheekbones (d/c={R_jc:.2f}≥1.00)."
-
-    elif (R_fj >= 1.05) and (R_fj < 1.15) and between(R_fc, 0.95, 1.15) and between(R_jc, 0.85, 1.05):
-        shape = "Upward Trapezoid Face"
-        why = f"Forehead slightly wider than jaw (a/d={R_fj:.2f} in 1.05–1.15) with near-parallel sides (a,c,d similar)."
-
-    elif (R_fj <= 0.95) and (R_fj > 0.87) and between(R_fc, 0.85, 1.05) and between(R_jc, 0.95, 1.15):
-        shape = "Downward Trapezoid Face"
-        why = f"Jaw slightly wider than forehead (a/d={R_fj:.2f} in 0.87–0.95) with near-parallel sides."
-
-    # Square: widths ~ equal; not long
-    elif between(R_hw, 1.00, 1.15) and approx1(R_fc, 0.12) and approx1(R_jc, 0.12):
-        shape = "Square Face"
-        why = f"Similar widths (a≈c≈d) and not long (b/c={R_hw:.2f} in 1.00–1.15)."
-
-    # Rectangular: widths ~ equal; somewhat long
-    elif between(R_hw, 1.15, 1.35) and approx1(R_fc, 0.12) and approx1(R_jc, 0.12):
-        shape = "Rectangular Face"
-        why = f"Similar widths (a≈c≈d) but longer (b/c={R_hw:.2f} in 1.15–1.35)."
-
-    # Oblong (Long): widths ~ equal; distinctly long
-    elif (R_hw > 1.35) and approx1(R_fc, 0.12) and approx1(R_jc, 0.12):
-        shape = "Oblong (Long) Face"
-        why = f"Similar widths (a≈c≈d) with pronounced length (b/c={R_hw:.2f} > 1.35)."
-
-    # Round: height ≈ width, forehead & jaw slightly soft
-    elif between(R_hw, 0.95, 1.10) and between(R_fc, 0.90, 1.00) and between(R_jc, 0.90, 1.00):
-        shape = "Round Face"
-        why = f"Height close to width (b/c={R_hw:.2f}), softer forehead/jaw (a/c={R_fc:.2f}, d/c={R_jc:.2f})."
-
-    # Oval: longer than round; cheekbones widest; forehead & jaw mildly narrower
-    elif between(R_hw, 1.20, 1.50) and between(R_fc, 0.85, 0.98) and between(R_jc, 0.85, 0.98):
-        shape = "Oval Face"
-        why = f"Longer (b/c={R_hw:.2f}) with cheekbones subtly widest (a/c={R_fc:.2f}, d/c={R_jc:.2f} < 1)."
-
-    else:
-        # Fallback using nearest family by R_hw
-        if R_hw >= 1.30:
-            shape = "Rectangular Face"
-            why = f"Fallback to rectangular family: length noticeable (b/c={R_hw:.2f})."
-        elif R_hw <= 1.05:
-            shape = "Square Face"
-            why = f"Fallback to square/round family: length minimal (b/c={R_hw:.2f})."
+    if approx_equal(a, b) and approx_equal(a, c) and approx_equal(a, d):
+        shape = "Square"
+        justification = (
+            f"Face is nearly as wide as it is long, and forehead, cheekbone, and jaw widths are similar "
+            f"(a≈b≈c≈d: {a:.1f}, {b:.1f}, {c:.1f}, {d:.1f})."
+        )
+    elif b > a * 1.1 and b > c * 1.1 and b > d * 1.1 and approx_equal(a, c) and approx_equal(a, d):
+        shape = "Oblong"
+        justification = (
+            f"Face height is much greater than its width (b={b:.1f} >> a,c,d), with similar forehead, cheek, jaw widths."
+        )
+    elif approx_equal(c, b) and b > a * 1.1 and b > d * 1.1 and c > a * 1.1 and c > d * 1.1:
+        shape = "Round"
+        justification = (
+            f"Face is nearly circular: cheekbone width ≈ face height (c≈b≈{b:.1f}), both larger than forehead (a={a:.1f}) and jaw (d={d:.1f})."
+        )
+    elif a > d:
+        if a > d * 1.2:
+            shape = "Heart"
+            justification = (
+                f"Broad forehead (a={a:.1f}) and narrower jaw (d={d:.1f}) indicate a heart-shaped face."
+            )
         else:
-            shape = "Oval Face"
-            why = f"Fallback to oval family: balanced length (b/c={R_hw:.2f})."
+            shape = "Trapezoid (Base Up)"
+            justification = (
+                f"Forehead is slightly wider than jaw (a≈{a:.1f}, d≈{d:.1f}), suggesting an inverted trapezoid face."
+            )
+    else:
+        if d > a * 1.2:
+            shape = "Triangle"
+            justification = (
+                f"Jaw is significantly wider than forehead (d={d:.1f} >> a={a:.1f}), indicating a triangular face."
+            )
+        else:
+            shape = "Trapezoid (Base Down)"
+            justification = (
+                f"Jaw is a bit wider than forehead (a≈{a:.1f}, d≈{d:.1f}), suggesting a trapezoid-shaped face (wider base)."
+            )
 
-    # Optionally elevate width attribute to primary
-    if treat_width_attributes_as_primary and attributes:
-        # If both wide & narrow somehow (shouldn't happen), keep primary shape
-        if len(attributes) == 1:
-            return attributes[0], f"Width attribute dominates ({attributes[0]}). {why}", debug, []
+    if shape is None:
+        shape = "Oval"
+        justification = "Proportions are balanced without extreme values, classified as Oval."
 
-    justification = f"{why} | ratios: R_hw={R_hw:.3f}, R_fc={R_fc:.3f}, R_jc={R_jc:.3f}, R_fj={R_fj:.3f}"
-    return shape, justification, debug, attributes
-
-# --- compatibility shim (keeps your old API/labels) ---------------------------
-
-def classify_face_type(a: float, b: float, c: float, d: float):
-    """Return (shape, ro_label, earring_tip) using your Romanian labels."""
-    primary, _, _, _ = classify_face_shape(
-        {}, measurements={"a": a, "b": b, "c": c, "d": d}
-    )
-
-    ro_label = {
-        "Round Face": "Rotundă / Limfatic – Lună",
-        "Oval Face": "Ovală / Sangvin – Soare",
-        "Oblong (Long) Face": "Alungită / Limfatic – Neptun",
-        "Triangular Face": "Triunghiulară / Nervos – Mercur",
-        "Heart-Shaped Face": "Inimă / Sangvin – Venus",
-        "Square Face": "Pătrată / Coleric – Pământ",
-        "Rectangular Face": "Dreptunghiulară / Sangvin – Marte",
-        "Diamond Face": "Diamant",
-        "Upward Trapezoid Face": "Trapez inversat (baza sus)",
-        "Downward Trapezoid Face": "Trapez (baza jos)",
-    }.get(primary, "Necunoscut / A se verifica")
-
-    earring_tip = {
-        "Round Face": "Long earrings, rectangles, long ovals. Avoid hoops.",
-        "Oval Face": "Any style of earrings will go.",
-        "Oblong (Long) Face": "Hoops, round studs, classy rounded shapes.",
-        "Triangular Face": "Large ovals, small circles, curved bottoms.",
-        "Heart-Shaped Face": "Triangulars, chandeliers, teardrops. Avoid tiny studs.",
-        "Square Face": "Long teardrops, oversized hoops, chandeliers.",
-        "Rectangular Face": "Small studs, round buttons, teardrops, hoops.",
-        "Diamond Face": "Small hoops, studs, small drop earrings.",
-        "Upward Trapezoid Face": "Teardrops, chandeliers; soften the forehead width.",
-        "Downward Trapezoid Face": "Rounded bottoms, soft curves; balance the jaw.",
-    }.get(primary, "No recommendation.")
-
-    return primary, ro_label, earring_tip
+    return shape, justification
