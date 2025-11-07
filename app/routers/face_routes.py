@@ -4,6 +4,7 @@ from app.services.image_loader import url_to_image
 from app.services.landmark_extraction import extract_face_landmarks
 from app.services.measurements import all_measurements
 from app.face_features.face_shape import classify_face_shape
+from app.face_features.face_shape import classify_face_type
 import numpy as np
 from app.services.bisenet import load_bisenet
 from app.services.bisenet import preprocess
@@ -87,23 +88,28 @@ async def analyze_face(images: ImageURLs):
     print(f"Measurements → a={a}, b={b}, c={c}, d={d}")
     face_shape, romanian_label, earring_tip = classify_face_type(a, b, c, d)
 
+    print("face_shape" , face_shape)
+
     jaw = 2 * d
 
+    if hairline_shape in ["V-shape", "Rounded"]:
+        if face_shape == "Diamond":
+            face_shape = "Heart"
+            romanian_label = "Inimă / Sangvin – Venus"
+            earring_tip = "Triangulars, chandeliers, teardrops. Avoid tiny studs."
+    elif hairline_shape in ["Flat", "Square"]:
+        if face_shape == "Square" and c > jaw * 1.1 and a < c and b > c:
+            face_shape = "Heart"
+            romanian_label = "Inimă / Sangvin – Venus"
+            earring_tip = "Triangulars, chandeliers, teardrops. Avoid tiny studs."
+
+    # Hairline-aware override
+    if face_shape == "Oval" and hairline_shape in ["V-shape", "Rounded"] and a < jaw:
+        face_shape = "Heart"
+        romanian_label = "Inimă / Sangvin – Venus"
+        earring_tip = "Triangulars, chandeliers, teardrops. Avoid tiny studs."
 
 
-    # Classify shape using the measurements directly (avoids recomputing)
-    try:
-        primary_shape, why, debug, attrs = classify_face_shape(
-            {},  # no landmarks needed since we pass explicit measurements
-            measurements={
-                "forehead_width": measurements.get("forehead_width"),
-                "face_height": measurements.get("face_height"),
-                "cheekbone_width": measurements.get("cheekbone_width"),
-                "jaw_width": measurements.get("jaw_width"),
-            },
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Classification error: {e}")
 
     # Optional: process side image later if needed
     # side_landmarks = None
@@ -113,21 +119,10 @@ async def analyze_face(images: ImageURLs):
     #         raise HTTPException(status_code=422, detail="No face found in side image.")
 
     return {
-        "shape": primary_shape,
-        "attributes": attrs,  # e.g., ["Wide Face"] / ["Narrow Face"] / []
-        "justification": why,
-        "ratios": {
-            "R_hw": debug.get("R_hw"),
-            "R_fc": debug.get("R_fc"),
-            "R_jc": debug.get("R_jc"),
-            "R_fj": debug.get("R_fj"),
+        "primary_shape": face_shape,            # final, hairline-aware type
+        "classification": {
+            "romanian_label": romanian_label,   # e.g., "Inimă / Sangvin – Venus"
+            "earring_tip": earring_tip          # style tip you already map per shape
         },
-        "measurements": {
-            "forehead_width": measurements.get("forehead_width"),
-            "face_height": measurements.get("face_height"),
-            "cheekbone_width": measurements.get("cheekbone_width"),
-            "jaw_width": measurements.get("jaw_width"),
-        },
-        # "front_landmarks_px": landmarks_px.tolist(),  # uncomment if you want to return the points
-        # "side_landmarks": side_landmarks[:10] if side_landmarks else None,
+        "hairline_shape": hairline_shape        # optional: useful context
     }

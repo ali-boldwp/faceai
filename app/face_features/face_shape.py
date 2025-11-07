@@ -68,6 +68,9 @@ def classify_face_type(a, b, c, d):
     return ("Unknown", "Necunoscut / A se verifica", "No recommendation.")
 
 def classify_face_shape(landmarks, measurements=None):
+    print("landmarks" , landmarks)
+    print("measurements" , measurements)
+
     if measurements is None:
         measurements = all_measurements(landmarks)
 
