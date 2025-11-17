@@ -1,10 +1,13 @@
-from fastapi import FastAPI,APIRouter, HTTPException
+from fastapi import FastAPI,APIRouter,Body, HTTPException
 from app.models.schemas import ImageURLs
+from app.models.schemas import Measurements
 from app.services.image_loader import url_to_image
 from app.services.landmark_extraction import extract_face_landmarks
 from app.services.measurements import all_measurements
 from app.face_features.face_shape import classify_face_shape
 from app.face_features.face_shape import classify_face_type
+from app.face_features.forhead import classify_forehead_traits
+from app.face_features.eyes import classify_eye_traits
 import numpy as np
 from app.services.bisenet import load_bisenet
 from app.services.bisenet import preprocess
@@ -66,6 +69,13 @@ async def analyze_face(images: ImageURLs):
     
     h, w = front_img.shape[:2]
 
+    print("face_landmarks" , face_landmarks)
+
+    landmarks = np.array([
+        [int(lm.x * w), int(lm.y * h)]
+        for lm in face_landmarks
+    ])
+
     try:
         landmarks_px = to_pixel_landmarks(face_landmarks, w, h)
     except ValueError as ve:
@@ -119,10 +129,46 @@ async def analyze_face(images: ImageURLs):
     #         raise HTTPException(status_code=422, detail="No face found in side image.")
 
     return {
-        "primary_shape": face_shape,            # final, hairline-aware type
+        "primary_shape": face_shape,            
         "classification": {
-            "romanian_label": romanian_label,   # e.g., "Inimă / Sangvin – Venus"
-            "earring_tip": earring_tip          # style tip you already map per shape
+            "romanian_label": romanian_label,   
+            "earring_tip": earring_tip         
         },
-        "hairline_shape": hairline_shape        # optional: useful context
+        "hairline_shape": hairline_shape,
+        "measurements" : measurements,
+        "face_landmarks"  
+
+
     }
+
+
+@router.post("/forehead")
+async def analyze_face(measurements: Measurements):
+    feature_shapes = {}        
+    psychological_traits = {} 
+
+    feature_shapes["forehead"], psychological_traits["forehead"] = classify_forehead_traits(measurements)
+    
+    return {
+        "forehead": feature_shapes["forehead"]["label"],
+        "justification": feature_shapes["forehead"]["justification"],
+        "measurements": measurements.dict(),
+        "traits": psychological_traits["forehead"]
+    }
+
+
+
+@router.post("/eyes")
+async def analyze_face(measurements: Measurements):
+    feature_shapes = {}        
+    psychological_traits = {} 
+
+    feature_shapes["eyes"], psychological_traits["eyes"] = classify_eye_traits(landmarks)
+    
+    return {
+        "eyes": feature_shapes["eyes"]["label"],
+        "justification": feature_shapes["eyes"]["justification"],
+        "measurements": measurements.dict(),
+        "traits": psychological_traits["eyes"]
+    }
+
