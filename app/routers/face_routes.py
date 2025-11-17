@@ -1,11 +1,12 @@
-from fastapi import FastAPI,APIRouter,Body, HTTPException
+from fastapi import FastAPI, APIRouter, Body, HTTPException
 from app.models.schemas import ImageURLs
 from app.models.schemas import Measurements
+from app.models.schemas import FaceLandmarkRequest
+
 from app.services.image_loader import url_to_image
 from app.services.landmark_extraction import extract_face_landmarks
 from app.services.measurements import all_measurements
-from app.face_features.face_shape import classify_face_shape
-from app.face_features.face_shape import classify_face_type
+from app.face_features.face_shape import classify_face_type  
 from app.face_features.forhead import classify_forehead_traits
 from app.face_features.eyes import classify_eye_traits
 import numpy as np
@@ -16,6 +17,8 @@ from app.services.bisenet import analyze_hairline
 from app.services.bisenet import extract_metrics
 import cv2
 import os
+
+
 
 router = APIRouter(prefix="/face", tags=["Face Analysis"])
 
@@ -53,26 +56,24 @@ def to_pixel_landmarks(landmarks_list, img_width, img_height):
     arr = np.asarray(pts, dtype=np.int32)
     return arr
 
+
 @router.post("/shape")
-async def analyze_face(images: ImageURLs):
+async def analyze_face_shape_route(images: ImageURLs):
     try:
         front_img, front_path = url_to_image(images.front_image_url, prefix="front")
         side_img = url_to_image(images.side_image_url) if getattr(images, "side_image_url", None) else None
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-    
+
     print("Front image saved as:", front_path)
 
     face_landmarks = extract_face_landmarks(front_img)
     if face_landmarks is None:
         raise HTTPException(status_code=422, detail="No face found in front image.")
-    
+
     h, w = front_img.shape[:2]
-
-    print("face_landmarks" , face_landmarks)
-
     landmarks = np.array([
-        [int(lm.x * w), int(lm.y * h)]
+        [int(lm[0] * w), int(lm[1] * h)]
         for lm in face_landmarks
     ])
 
@@ -80,11 +81,22 @@ async def analyze_face(images: ImageURLs):
         landmarks_px = to_pixel_landmarks(face_landmarks, w, h)
     except ValueError as ve:
         raise HTTPException(status_code=500, detail=f"Landmark conversion error: {ve}")
-    
+
     try:
         measurements = all_measurements(landmarks_px)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Measurement error: {e}")
+
+    a = measurements.get("forehead_width")
+    b = measurements.get("face_height")
+    c = measurements.get("cheekbone_width")
+    jaw_width = measurements.get("jaw_width")
+
+    if None in (a, b, c, jaw_width):
+        raise HTTPException(
+            status_code=500,
+            detail="Missing key measurements (forehead_width, face_height, cheekbone_width, jaw_width).",
+        )
 
     net = load_bisenet()
     tensor, rgb = preprocess(front_path)
@@ -94,56 +106,51 @@ async def analyze_face(images: ImageURLs):
     hairline_shape, hairline_y = analyze_hairline(hair_mask_img, rgb)
 
     print("Detected Hairline Shape:", hairline_shape)
-    a, b, c, d = extract_metrics(parsing, hairline_y)
-    print(f"Measurements → a={a}, b={b}, c={c}, d={d}")
-    face_shape, romanian_label, earring_tip = classify_face_type(a, b, c, d)
 
-    print("face_shape" , face_shape)
+    try:
+        a_h, b_h, c_h, d_h = extract_metrics(parsing, hairline_y)
+        print(f"[DEBUG] BiSeNet metrics (NOT used for shape) → a={a_h}, b={b_h}, c={c_h}, d={d_h}")
+    except Exception as e:
+        print("[WARN] extract_metrics failed:", e)
 
-    jaw = 2 * d
+    base_shape, romanian_label, earring_tip = classify_face_type(
+        forehead_width=a,
+        face_height=b,
+        cheekbone_width=c,
+        jaw_width=jaw_width,
+    )
+
+    print("[DEBUG] Base face shape:", base_shape)
+
+    face_shape = base_shape  # start from base
 
     if hairline_shape in ["V-shape", "Rounded"]:
-        if face_shape == "Diamond":
-            face_shape = "Heart"
-            romanian_label = "Inimă / Sangvin – Venus"
-            earring_tip = "Triangulars, chandeliers, teardrops. Avoid tiny studs."
-    elif hairline_shape in ["Flat", "Square"]:
-        if face_shape == "Square" and c > jaw * 1.1 and a < c and b > c:
+        if base_shape == "Diamond":
             face_shape = "Heart"
             romanian_label = "Inimă / Sangvin – Venus"
             earring_tip = "Triangulars, chandeliers, teardrops. Avoid tiny studs."
 
-    # Hairline-aware override
-    if face_shape == "Oval" and hairline_shape in ["V-shape", "Rounded"] and a < jaw:
-        face_shape = "Heart"
-        romanian_label = "Inimă / Sangvin – Venus"
-        earring_tip = "Triangulars, chandeliers, teardrops. Avoid tiny studs."
+        elif base_shape in ["Square", "Oval"]:
+            if a > jaw_width and c >= a * 0.9:  # forehead ≥ jaw, strong cheeks
+                face_shape = "Heart"
+                romanian_label = "Inimă / Sangvin – Venus"
+                earring_tip = "Triangulars, chandeliers, teardrops. Avoid tiny studs."
 
-
-
-    # Optional: process side image later if needed
-    # side_landmarks = None
-    # if side_img is not None:
-    #     side_landmarks = extract_face_landmarks(side_img)
-    #     if side_landmarks is None:
-    #         raise HTTPException(status_code=422, detail="No face found in side image.")
+    print("[DEBUG] Final face shape after hairline refinement:", face_shape)
 
     return {
-        "primary_shape": face_shape,            
+        "primary_shape": face_shape,
         "classification": {
-            "romanian_label": romanian_label,   
-            "earring_tip": earring_tip         
+            "romanian_label": romanian_label,
+            "earring_tip": earring_tip,
         },
         "hairline_shape": hairline_shape,
-        "measurements" : measurements,
-        "face_landmarks"  
-
-
+        "measurements": measurements,
+        "face_landmarks": landmarks.tolist()
     }
 
-
 @router.post("/forehead")
-async def analyze_face(measurements: Measurements):
+async def analyze_forehead_route(measurements: Measurements):
     feature_shapes = {}        
     psychological_traits = {} 
 
@@ -159,7 +166,8 @@ async def analyze_face(measurements: Measurements):
 
 
 @router.post("/eyes")
-async def analyze_face(measurements: Measurements):
+async def analyze_eyes_route(data: FaceLandmarkRequest):
+    landmarks = data.face_landmarks
     feature_shapes = {}        
     psychological_traits = {} 
 
@@ -168,7 +176,6 @@ async def analyze_face(measurements: Measurements):
     return {
         "eyes": feature_shapes["eyes"]["label"],
         "justification": feature_shapes["eyes"]["justification"],
-        "measurements": measurements.dict(),
         "traits": psychological_traits["eyes"]
     }
 

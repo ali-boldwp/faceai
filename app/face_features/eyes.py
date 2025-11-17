@@ -2,8 +2,11 @@
 import numpy as np
 
 def classify_eye_traits(landmarks):
-    left_eye = np.array(landmarks[36:42])
-    right_eye = np.array(landmarks[42:48])
+    LEFT_EYE = [33, 159, 158, 157, 133, 145, 144, 153]
+    RIGHT_EYE = [263, 386, 385, 384, 362, 374, 373, 380]
+
+    left_eye = np.array([landmarks[i] for i in LEFT_EYE])
+    right_eye = np.array([landmarks[i] for i in RIGHT_EYE])
 
     traits = []
     shape_label = ""

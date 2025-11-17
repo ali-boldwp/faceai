@@ -1,4 +1,5 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import List
 
 class ImageURLs(BaseModel):
     front_image_url: str
@@ -16,3 +17,12 @@ class Measurements(BaseModel):
     interocular_distance: float
     eye_width_left: float
     eye_width_right: float
+
+
+class Landmark(BaseModel):
+    x: float
+    y: float
+    z: float | None = None  
+
+class FaceLandmarkRequest(BaseModel):
+    face_landmarks: List[List[int]]
