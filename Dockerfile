@@ -1,32 +1,32 @@
-# ==== Base image ====
 FROM python:3.11-slim
 
-# No .pyc files, instant logs
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Workdir inside the container
 WORKDIR /app
 
-# ---- System deps (for things like OpenCV, numpy, etc.) ----
+# ---- System deps for OpenCV, numpy, PyTorch ----
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
- && rm -rf /var/lib/apt/lists/*
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
 
-# ---- Python deps ----
-# Copy only requirements first to leverage Docker layer cache
-COPY requirements.txt .
+# ---- Copy requirements ----
+COPY requirements.txt /app/
 
+# ---- Install Python deps ----
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ---- App code ----
-COPY . .
+# ---- Copy full project ----
+COPY . /app
 
-# Port uvicorn will listen on
+# Expose FastAPI port
 EXPOSE 8000
 
-# ---- Start FastAPI with Uvicorn ----
-# If your entry is different, change "app.main:app" accordingly
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Start server (your app is in main.py)
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
