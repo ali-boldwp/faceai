@@ -17,6 +17,9 @@ from app.services.bisenet import analyze_hairline
 from app.services.bisenet import extract_metrics
 import cv2
 import os
+from pydantic import BaseModel
+from typing import Optional
+import json
 
 
 
@@ -56,9 +59,14 @@ def to_pixel_landmarks(landmarks_list, img_width, img_height):
     arr = np.asarray(pts, dtype=np.int32)
     return arr
 
+class ImageURLs(BaseModel):
+    front_image_url: str
+    side_image_url: Optional[str] = None
 
 @router.post("/shape")
-async def analyze_face_shape_route(images: ImageURLs):
+async def analyze_face_shape_route(raw: str = Body(..., media_type="text/plain")):
+    data = json.loads(raw)
+    images = ImageURLs(**data)
     try:
         front_img, front_path = url_to_image(images.front_image_url, prefix="front")
         side_img = url_to_image(images.side_image_url) if getattr(images, "side_image_url", None) else None
@@ -125,14 +133,14 @@ async def analyze_face_shape_route(images: ImageURLs):
     face_shape = base_shape  # start from base
 
     if hairline_shape in ["V-shape", "Rounded"]:
-        if base_shape == "Diamond":
-            face_shape = "Heart"
+        if base_shape == "Diamond Face":
+            face_shape = "Heart-Shaped Face"
             romanian_label = "Inimă / Sangvin – Venus"
             earring_tip = "Triangulars, chandeliers, teardrops. Avoid tiny studs."
 
-        elif base_shape in ["Square", "Oval"]:
+        elif base_shape in ["Square Face", "Oval Face"]:
             if a > jaw_width and c >= a * 0.9:  # forehead ≥ jaw, strong cheeks
-                face_shape = "Heart"
+                face_shape = "Heart-Shaped Face"
                 romanian_label = "Inimă / Sangvin – Venus"
                 earring_tip = "Triangulars, chandeliers, teardrops. Avoid tiny studs."
 

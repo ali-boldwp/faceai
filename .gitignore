@@ -5,6 +5,8 @@ __pycache__/
 
 # C extensions
 *.so
+face-parsing.PyTorch
+/face-parsing.PyTorch
 
 # Distribution / packaging
 .Python

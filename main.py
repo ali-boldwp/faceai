@@ -7,11 +7,7 @@ app = FastAPI(title="Face Morphology API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://faceai.pwtech.ro",
-        "https://preview--main--face-ai--zaman.code.devregion.com",
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
