@@ -1,3 +1,5 @@
+# app/services/bisenet.py
+
 import sys
 import os
 import cv2
@@ -6,17 +8,101 @@ import torch
 from torchvision import transforms
 from PIL import Image
 import matplotlib.pyplot as plt
+import requests  # <--- NEW
 
-sys.path.append(os.path.abspath("./face-parsing.PyTorch"))
+# -------------------------------------------------------------------
+# Auto-setup for face-parsing.PyTorch + BiSeNet weights
+# -------------------------------------------------------------------
 
-from model import BiSeNet
+# Where we will keep the original face-parsing code
+FACE_PARSING_DIR = os.path.abspath("./face-parsing.PyTorch")
 
-# Load BiSeNet model
-def load_bisenet(checkpoint='face-parsing.PyTorch/weights/79999_iter.pth', n_classes=19):
+# Where we will keep the pretrained weights
+WEIGHTS_DIR = os.path.join(FACE_PARSING_DIR, "weights")
+WEIGHTS_NAME = "79999_iter.pth"
+WEIGHTS_PATH = os.path.join(WEIGHTS_DIR, WEIGHTS_NAME)
+
+# URLs for original code & weights
+MODEL_URL = "https://raw.githubusercontent.com/zllrunning/face-parsing.PyTorch/master/model.py"
+RESNET_URL = "https://raw.githubusercontent.com/zllrunning/face-parsing.PyTorch/master/resnet.py"
+WEIGHTS_URL = "https://huggingface.co/bes-dev/face_parsing/resolve/main/79999_iter.pth"
+
+
+def _download_file(url: str, dst_path: str, desc: str) -> None:
+    """Download a file if it does not exist."""
+    os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+    if os.path.exists(dst_path):
+        return
+
+    print(f"[BiSeNet] Downloading {desc} from {url} ...")
+    try:
+        with requests.get(url, stream=True, timeout=60) as r:
+            r.raise_for_status()
+            with open(dst_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+        print(f"[BiSeNet] Downloaded {desc} to {dst_path}")
+    except Exception as e:
+        # Clean up partial file if something went wrong
+        if os.path.exists(dst_path):
+            try:
+                os.remove(dst_path)
+            except OSError:
+                pass
+        raise RuntimeError(f"Failed to download {desc} from {url}: {e}")
+
+
+def ensure_face_parsing_code() -> None:
+    """Ensure face-parsing.PyTorch/model.py and resnet.py are present locally."""
+    os.makedirs(FACE_PARSING_DIR, exist_ok=True)
+    model_py = os.path.join(FACE_PARSING_DIR, "model.py")
+    resnet_py = os.path.join(FACE_PARSING_DIR, "resnet.py")
+
+    _download_file(MODEL_URL, model_py, "face-parsing model.py")
+    _download_file(RESNET_URL, resnet_py, "face-parsing resnet.py")
+
+
+def ensure_bisenet_weights() -> None:
+    """Ensure BiSeNet weights 79999_iter.pth are present locally."""
+    _download_file(WEIGHTS_URL, WEIGHTS_PATH, "BiSeNet weights (79999_iter.pth)")
+
+
+# Ensure code exists, then import BiSeNet from it
+ensure_face_parsing_code()
+sys.path.append(FACE_PARSING_DIR)
+from model import BiSeNet  # <-- THIS is the official BiSeNet that matches the weights
+
+
+def load_bisenet(checkpoint: str = WEIGHTS_PATH, n_classes: int = 19):
+    """
+    Load BiSeNet with pretrained face-parsing weights.
+
+    - If the face-parsing code is missing, it is downloaded.
+    - If the weights file is missing, it is downloaded.
+    """
+    ensure_bisenet_weights()
+
+    if not os.path.exists(checkpoint):
+        raise FileNotFoundError(
+            f"BiSeNet weights are missing even after download: {checkpoint}"
+        )
+
     net = BiSeNet(n_classes=n_classes)
-    net.load_state_dict(torch.load(checkpoint, map_location='cpu', weights_only=False))
+    print(f"[BiSeNet] Loading weights from {checkpoint}")
+    state = torch.load(checkpoint, map_location="cpu")
+    net.load_state_dict(state)  # strict=True by default, now architecture matches
     net.eval()
     return net
+
+# -------------------------------------------------------------------
+# Keep your existing functions BELOW this point:
+# - preprocess(...)
+# - hair_mask(...)
+# - analyze_hairline(...)
+# - etc.
+# -------------------------------------------------------------------
+
 
 # Preprocess image
 def preprocess(img_path, size=(512,512)):

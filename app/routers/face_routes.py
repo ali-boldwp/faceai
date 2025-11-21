@@ -6,9 +6,13 @@ from app.models.schemas import FaceLandmarkRequest
 from app.services.image_loader import url_to_image
 from app.services.landmark_extraction import extract_face_landmarks
 from app.services.measurements import all_measurements
+from app.services.measurements import all_ratios, all_angles
 from app.face_features.face_shape import classify_face_type  
 from app.face_features.forhead import classify_forehead_traits
 from app.face_features.eyes import classify_eye_traits
+from app.face_features.full_analysis import build_full_analysis
+from app.utils.image_utils import draw_landmarks_image
+from app.models.schemas import FullFaceAnalysis
 import numpy as np
 from app.services.bisenet import load_bisenet
 from app.services.bisenet import preprocess
@@ -187,3 +191,107 @@ async def analyze_eyes_route(data: FaceLandmarkRequest):
         "traits": psychological_traits["eyes"]
     }
 
+
+@router.post("/full", response_model=FullFaceAnalysis)
+async def analyze_full_face_route(raw: str = Body(..., media_type="text/plain")):
+    """Unified endpoint that returns face shape + forehead + eyes + debug info in one response.
+
+    Expects the same payload as /face/shape:
+    {
+      "front_image_url": "...",
+      "side_image_url": "..." // optional
+    }
+    """
+    data = json.loads(raw)
+    images = ImageURLs(**data)
+
+    # 1) Load front image
+    try:
+        front_img, front_path = url_to_image(images.front_image_url, prefix="front_full")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error loading front image: {e}")
+
+    h, w = front_img.shape[:2]
+
+    # 2) Landmarks via MediaPipe
+    face_landmarks = extract_face_landmarks(front_img)
+    if face_landmarks is None:
+        raise HTTPException(status_code=422, detail="No face found in front image.")
+
+    try:
+        landmarks_px = to_pixel_landmarks(face_landmarks, w, h)
+    except ValueError as ve:
+        raise HTTPException(status_code=500, detail=f"Landmark conversion error: {ve}")
+
+    # 3) Measurements, ratios, angles
+    try:
+        measurements = all_measurements(landmarks_px)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Measurement error: {e}")
+
+    ratios = all_ratios(measurements)
+    try:
+        angles = all_angles(landmarks_px)
+    except Exception as e:
+        # Angles are mainly used for jawline analysis; don't fail the whole request if it breaks
+        angles = {}
+        print("[WARN] all_angles failed in /face/full:", e)
+
+    a = measurements.get("forehead_width")
+    b = measurements.get("face_height")
+    c = measurements.get("cheekbone_width")
+    jaw_width = measurements.get("jaw_width")
+
+    if None in (a, b, c, jaw_width):
+        raise HTTPException(
+            status_code=500,
+            detail="Missing key measurements (forehead_width, face_height, cheekbone_width, jaw_width).",
+        )
+
+    # 4) Hairline via BiSeNet
+    net = load_bisenet()
+    tensor, rgb = preprocess(front_path)
+    hair_mask_img, parsing = hair_mask(net, tensor)
+    hair_mask_path = os.path.join("tmp", "hair_mask_full.png")
+    cv2.imwrite(hair_mask_path, hair_mask_img * 255)
+
+    hairline_shape, hairline_y = analyze_hairline(hair_mask_img, rgb)
+
+    # 5) Face shape from your existing classifier
+    base_shape, romanian_label, earring_tip = classify_face_type(
+        forehead_width=a,
+        face_height=b,
+        cheekbone_width=c,
+        jaw_width=jaw_width,
+    )
+
+    # 6) Forehead & eyes traits
+    measurements_model = Measurements(**measurements)
+    forehead_shape, forehead_traits = classify_forehead_traits(measurements_model)
+
+    # For eyes we reuse the pixel landmarks (list-of-[x,y])
+    eyes_shape, eye_traits = classify_eye_traits(landmarks_px.tolist())
+
+    # 7) Landmarks overlay image
+    landmarks_image_path = os.path.join("tmp", "landmarks_full.png")
+    draw_landmarks_image(front_img, landmarks_px, landmarks_image_path)
+
+    # 8) Build unified analysis object
+    analysis = build_full_analysis(
+        base_shape=base_shape,
+        romanian_label=romanian_label,
+        earring_tip=earring_tip,
+        hairline_shape=hairline_shape,
+        forehead_shape=forehead_shape,
+        forehead_traits=forehead_traits,
+        eyes_shape=eyes_shape,
+        eye_traits=eye_traits,
+        measurements={k: float(v) for k, v in measurements.items()},
+        ratios=ratios,
+        angles=angles,
+        landmarks=landmarks_px.tolist(),
+        hair_mask_path=hair_mask_path,
+        landmarks_image_path=landmarks_image_path,
+    )
+
+    return analysis
