@@ -45,8 +45,8 @@ def _build_face_shape_section(
                 #     "jaw_width",
                 #     "face_height",
                 # ],
-                # image_url=image_to_data_url( os.path.join(base_dir, "face_type_abcd.png") ),
-                image_url=os.path.join(base_dir, "face_type_abcd.png"),
+                image_url=image_to_data_url( os.path.join(base_dir, "face_type_abcd.png") ),
+                # image_url=os.path.join(base_dir, "face_type_abcd.png"),
                 measurements_used=base_shape_measurements_used,
                 notes=(
                     f"Rule used: {base_shape_rule or 'prototype fallback'}; "
