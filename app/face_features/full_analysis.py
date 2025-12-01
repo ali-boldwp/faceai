@@ -1,4 +1,6 @@
 from typing import Dict, List, Optional
+import os
+from app.services.image import image_to_data_url
 
 from app.models.schemas import (
     TraitEvidence,
@@ -11,13 +13,19 @@ from app.face_features.eyebrows import classify_eyebrow_traits
 
 
 def _build_face_shape_section(
+    base_dir: str,
+    ID: str,
     base_shape: str,
     romanian_label: str,
     earring_tip: Optional[str],
     hairline_shape: Optional[str],
+    base_shape_measurements_used: Dict[str, float],
+    base_shape_rule: Optional[str] = None,
     hairline_image_url: Optional[str] = None,
 ) -> SectionAnalysis:
     traits: List[TraitAnalysis] = []
+
+    print ( base_shape_measurements_used )
 
     # Primary face shape trait
     traits.append(
@@ -31,28 +39,35 @@ def _build_face_shape_section(
                 f"Romanian label: {romanian_label}."
             ),
             evidence=TraitEvidence(
-                measurements_used=[
-                    "forehead_width",
-                    "cheekbone_width",
-                    "jaw_width",
-                    "face_height",
-                ],
-                notes="Classification derived from 'Tehnica de citire a feței' face-shape rules.",
+                # measurements_used=[
+                #     "forehead_width",
+                #     "cheekbone_width",
+                #     "jaw_width",
+                #     "face_height",
+                # ],
+                # image_url=image_to_data_url( os.path.join(base_dir, "face_type_abcd.png") ),
+                image_url=os.path.join(base_dir, "face_type_abcd.png"),
+                measurements_used=base_shape_measurements_used,
+                notes=(
+                    f"Rule used: {base_shape_rule or 'prototype fallback'}; "
+                    "Classification derived from 'Tehnica de citire a feței' "
+                    "face-shape rules."
+                )
             ),
         )
     )
 
     # Earring tip from your original logic
-    if earring_tip:
-        traits.append(
-            TraitAnalysis(
-                name="Earring Recommendation",
-                present=True,
-                confidence=1.0,
-                explanation=earring_tip,
-                evidence=TraitEvidence(notes="Original earring style tip for this face shape."),
-            )
-        )
+    # if earring_tip:
+    #     traits.append(
+    #         TraitAnalysis(
+    #             name="Earring Recommendation",
+    #             present=True,
+    #             confidence=1.0,
+    #             explanation=earring_tip,
+    #             evidence=TraitEvidence(notes="Original earring style tip for this face shape."),
+    #         )
+    #     )
 
     # Hairline as an influencing trait
     if hairline_shape:
@@ -94,7 +109,7 @@ def _build_eyebrows_section(
             confidence=1.0,
             explanation=eyebrow_shape_info["justification"],
             evidence=TraitEvidence(
-                measurements_used=["interocular_distance"],
+                measurements_used={"interocular_distance": None},
                 landmark_indices=[],
                 image_url=None,
                 notes="Derived from eyebrow and eye landmarks.",
@@ -112,7 +127,7 @@ def _build_eyebrows_section(
                 confidence=1.0,
                 explanation=t.get("explanation", ""),
                 evidence=TraitEvidence(
-                    measurements_used=[],
+                    measurements_used={},
                     landmark_indices=[],
                     image_url=None,
                     notes=t.get("source", ""),
@@ -141,7 +156,7 @@ def _build_forehead_section(
             confidence=1.0,
             explanation=forehead_shape.get("justification", ""),
             evidence=TraitEvidence(
-                measurements_used=["forehead_width", "jaw_width"],
+                measurements_used={}, # ["forehead_width", "jaw_width"]
                 notes="Based on forehead_width / jaw_width ratio.",
             ),
         )
@@ -182,11 +197,11 @@ def _build_eyes_section(
             confidence=1.0,
             explanation=eyes_shape.get("justification", ""),
             evidence=TraitEvidence(
-                measurements_used=[
-                    "interocular_distance",
-                    "eye_width_left",
-                    "eye_width_right",
-                ],
+                measurements_used={
+                    "interocular_distance": None,
+                    "eye_width_left": None,
+                    "eye_width_right": None,
+                },
                 notes="Aspect ratio and tilt computed from eye landmarks.",
             ),
         )
@@ -213,8 +228,12 @@ def _build_eyes_section(
     )
 
 
+
 def build_full_analysis(
+    base_dir: str,
+    ID: str,
     base_shape: str,
+    base_shape_measurements_used: Dict[str, float],
     romanian_label: str,
     earring_tip: Optional[str],
     hairline_shape: Optional[str],
@@ -223,11 +242,12 @@ def build_full_analysis(
     eyes_shape: Dict,
     eye_traits: List[Dict],
     measurements: Dict[str, float],
-    ratios: Dict[str, float],
-    angles: Dict[str, float],
-    landmarks: List[List[int]],
-    hair_mask_path: Optional[str],
-    landmarks_image_path: Optional[str],
+    base_shape_rule: Optional[str] = None,
+    ratios: Dict[str, float] = None,
+    angles: Dict[str, float] = None,
+    landmarks: List[List[int]] = None,
+    hair_mask_path: Optional[str] = None,
+    landmarks_image_path: Optional[str] = None,
 ) -> FullFaceAnalysis:
     """Assemble a unified FullFaceAnalysis object from all partial classifiers.
 
@@ -242,11 +262,15 @@ def build_full_analysis(
 
     sections.append(
         _build_face_shape_section(
+            base_dir=base_dir,
+            ID=ID,
             base_shape=base_shape,
             romanian_label=romanian_label,
             earring_tip=earring_tip,
             hairline_shape=hairline_shape,
-            hairline_image_url=hair_mask_path,
+            hairline_image_url=image_to_data_url( hair_mask_path ),
+            base_shape_rule=base_shape_rule,
+            base_shape_measurements_used=base_shape_measurements_used
         )
     )
 
@@ -269,6 +293,7 @@ def build_full_analysis(
 
 
     return FullFaceAnalysis(
+        ID=ID,
         primary_shape=base_shape,
         romanian_label=romanian_label,
         earring_tip=earring_tip,

@@ -27,7 +27,6 @@ MODEL_URL = "https://raw.githubusercontent.com/zllrunning/face-parsing.PyTorch/m
 RESNET_URL = "https://raw.githubusercontent.com/zllrunning/face-parsing.PyTorch/master/resnet.py"
 WEIGHTS_URL = "https://huggingface.co/bes-dev/face_parsing/resolve/main/79999_iter.pth"
 
-
 def _download_file(url: str, dst_path: str, desc: str) -> None:
     """Download a file if it does not exist."""
     os.makedirs(os.path.dirname(dst_path), exist_ok=True)
@@ -124,29 +123,67 @@ def hair_mask(net, tensor):
 # Hairline analysis
 def analyze_hairline(mask, rgb_img, out_path='hairline_output.png'):
     h, w = mask.shape
-    y1, y2 = int(h*0.12), int(h*0.30)
-    x1, x2 = int(w*0.25), int(w*0.75)
-    roi = np.zeros_like(mask)
-    roi[y1:y2, x1:x2] = 1
-    hairline = np.logical_and(mask, roi)
-    ys, xs = np.where(hairline)
+
+    # 1) Find hair bounding box first
+    ys_all, xs_all = np.where(mask)
+    if len(xs_all) < 10:
+        return "Not enough hair pixels", 0
+
+    y_min, y_max = ys_all.min(), ys_all.max()
+    x_min, x_max = xs_all.min(), xs_all.max()
+
+    # 2) Use the LOWER part of the hair bbox as ROI (actual hairline zone)
+    #    e.g. bottom 40% of hair bbox
+    y1 = int(y_min + 0.6 * (y_max - y_min))
+    y2 = y_max
+    x1 = int(x_min + 0.1 * (x_max - x_min))
+    x2 = int(x_max - 0.1 * (x_max - x_min))
+
+    roi = np.zeros_like(mask, dtype=bool)
+    roi[y1:y2, x1:x2] = True
+
+    hairline_region = np.logical_and(mask.astype(bool), roi)
+    ys, xs = np.where(hairline_region)
     if len(xs) < 10:
         return "Not enough hairline points", y1
+
     unique_x = np.unique(xs)
-    hairline_y = {x: min(ys[xs == x]) for x in unique_x}
-    xs_s, ys_s = np.array(sorted(hairline_y.keys())), np.array([hairline_y[x] for x in sorted(hairline_y)])
+
+    # 3) For each x, take the BOTTOM-most hair pixel as hairline
+    hairline_y = {x: max(ys[xs == x]) for x in unique_x}
+    xs_s = np.array(sorted(hairline_y.keys()))
+    ys_s = np.array([hairline_y[x] for x in xs_s])
+
+    # Quadratic fit
     coeffs = np.polyfit(xs_s, ys_s, 2)
-    a = coeffs[0]; dy = ys_s.max() - ys_s.min()
-    asym = abs(xs_s[:len(xs_s)//2].mean() - xs_s[len(xs_s)//2:].mean())
-    def classify(a, asym, dy):
-        if a<-0.003 and asym>15: return "M-shape"
-        if a<-0.003: return "Square"
-        if a>0.003 and dy>20: return "V-shape"
-        if a>0.003: return "Rounded"
-        if abs(a)<=0.003 and dy<10: return "Flat"
-        if dy>35 and asym>20: return "Crown/Irregular"
+    a = coeffs[0]
+    dy = ys_s.max() - ys_s.min()
+
+    # Center vs sides (better than global dy for V/M)
+    mid_x = xs_s.mean()
+    mid_idx = np.argmin(np.abs(xs_s - mid_x))
+    mid_y = ys_s[mid_idx]
+    side_n = max(5, len(xs_s)//8)
+    side_mean = np.concatenate([ys_s[:side_n], ys_s[-side_n:]]).mean()
+    delta_mid = mid_y - side_mean   # >0 = center LOWER (V), <0 = center HIGHER (M)
+
+    def classify(a, dy, delta_mid):
+        # M: center higher, sides lower
+        if delta_mid < -8 and dy > 15:
+            return "M-shape"
+        # V: center lower, strong dip
+        if delta_mid > 8 and dy > 15:
+            return "V-shape"
+        # Rounded vs Flat
+        if dy > 10:
+            return "Rounded"
+        if dy <= 10:
+            return "Flat"
         return "Unclassified"
-    shape = classify(a, asym, dy)
+
+    shape = classify(a, dy, delta_mid)
+
+    # Debug plot
     plt.imshow(rgb_img)
     plt.scatter(xs_s, ys_s, s=2, c='red')
     plt.plot(xs_s, np.poly1d(coeffs)(xs_s), c='blue')
@@ -154,7 +191,8 @@ def analyze_hairline(mask, rgb_img, out_path='hairline_output.png'):
     plt.axis('off')
     plt.savefig(out_path)
     plt.close()
-    return shape, int(min(ys_s))
+
+    return shape, int(ys_s.min())
 
 # Extract measurements
 def extract_metrics(parsing_mask, hairline_y):

@@ -13,6 +13,7 @@ from app.face_features.eyes import classify_eye_traits
 from app.face_features.full_analysis import build_full_analysis
 from app.utils.image_utils import draw_landmarks_image
 from app.models.schemas import FullFaceAnalysis
+from app.services.visualization import draw_landmarks_with_indices
 import numpy as np
 from app.services.bisenet import load_bisenet
 from app.services.bisenet import preprocess
@@ -67,6 +68,10 @@ class ImageURLs(BaseModel):
     front_image_url: str
     side_image_url: Optional[str] = None
 
+    
+class ChatID(BaseModel):
+    ID: str
+
 @router.post("/shape")
 async def analyze_face_shape_route(raw: str = Body(..., media_type="text/plain")):
     data = json.loads(raw)
@@ -79,7 +84,7 @@ async def analyze_face_shape_route(raw: str = Body(..., media_type="text/plain")
 
     print("Front image saved as:", front_path)
 
-    face_landmarks = extract_face_landmarks(front_img)
+    face_landmarks = extract_face_landmarks(front_img, min_face_conf=0.9, min_mesh_conf=0.9)
     if face_landmarks is None:
         raise HTTPException(status_code=422, detail="No face found in front image.")
 
@@ -125,7 +130,7 @@ async def analyze_face_shape_route(raw: str = Body(..., media_type="text/plain")
     except Exception as e:
         print("[WARN] extract_metrics failed:", e)
 
-    base_shape, romanian_label, earring_tip = classify_face_type(
+    base_shape, romanian_label, earring_tip, base_rule = classify_face_type(
         forehead_width=a,
         face_height=b,
         cheekbone_width=c,
@@ -194,7 +199,8 @@ async def analyze_eyes_route(data: FaceLandmarkRequest):
 
 @router.post("/full", response_model=FullFaceAnalysis)
 async def analyze_full_face_route(raw: str = Body(..., media_type="text/plain")):
-    """Unified endpoint that returns face shape + forehead + eyes + debug info in one response.
+    """
+    Unified endpoint that returns face shape + forehead + eyes + debug info in one response.
 
     Expects the same payload as /face/shape:
     {
@@ -204,6 +210,11 @@ async def analyze_full_face_route(raw: str = Body(..., media_type="text/plain"))
     """
     data = json.loads(raw)
     images = ImageURLs(**data)
+    chat_id = ChatID(**data).ID
+
+    # 🔹 Make sure per-chat tmp dir exists
+    base_dir = os.path.join("tmp", str(chat_id))
+    os.makedirs(base_dir, exist_ok=True)
 
     # 1) Load front image
     try:
@@ -214,18 +225,38 @@ async def analyze_full_face_route(raw: str = Body(..., media_type="text/plain"))
     h, w = front_img.shape[:2]
 
     # 2) Landmarks via MediaPipe
-    face_landmarks = extract_face_landmarks(front_img)
+    face_landmarks, face_score = extract_face_landmarks(front_img, min_face_conf=0.7, min_mesh_conf=0.7)
     if face_landmarks is None:
-        raise HTTPException(status_code=422, detail="No face found in front image.")
+        raise HTTPException(
+            status_code=422,
+            detail=f"No reliable face found in front image (score={face_score:.2f}).",
+        )
 
     try:
         landmarks_px = to_pixel_landmarks(face_landmarks, w, h)
     except ValueError as ve:
         raise HTTPException(status_code=500, detail=f"Landmark conversion error: {ve}")
 
-    # 3) Measurements, ratios, angles
+    # 3) Hairline via BiSeNet (we need this BEFORE all_measurements)
+    net = load_bisenet()
+    tensor, rgb = preprocess(front_path)
+    hair_mask_img, parsing = hair_mask(net, tensor)
+
+    hair_mask_path = os.path.join(base_dir, "hair_mask_full.png")
+    cv2.imwrite(hair_mask_path, hair_mask_img * 255)
+
+    hairline_shape, hairline_y = analyze_hairline(hair_mask_img, rgb)
+
+    # 4) Measurements, ratios, angles (now using hairline_y + hair_mask_img)
     try:
-        measurements = all_measurements(landmarks_px)
+        measurements = all_measurements(
+            landmarks_px,
+            front_path=front_path,
+            hairline_y=hairline_y,
+            hair_mask_img=hair_mask_img,
+            ID=chat_id,
+            draw=True,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Measurement error: {e}")
 
@@ -248,17 +279,8 @@ async def analyze_full_face_route(raw: str = Body(..., media_type="text/plain"))
             detail="Missing key measurements (forehead_width, face_height, cheekbone_width, jaw_width).",
         )
 
-    # 4) Hairline via BiSeNet
-    net = load_bisenet()
-    tensor, rgb = preprocess(front_path)
-    hair_mask_img, parsing = hair_mask(net, tensor)
-    hair_mask_path = os.path.join("tmp", "hair_mask_full.png")
-    cv2.imwrite(hair_mask_path, hair_mask_img * 255)
-
-    hairline_shape, hairline_y = analyze_hairline(hair_mask_img, rgb)
-
     # 5) Face shape from your existing classifier
-    base_shape, romanian_label, earring_tip = classify_face_type(
+    base_shape, romanian_label, earring_tip, base_shape_rule = classify_face_type(
         forehead_width=a,
         face_height=b,
         cheekbone_width=c,
@@ -272,13 +294,26 @@ async def analyze_full_face_route(raw: str = Body(..., media_type="text/plain"))
     # For eyes we reuse the pixel landmarks (list-of-[x,y])
     eyes_shape, eye_traits = classify_eye_traits(landmarks_px.tolist())
 
-    # 7) Landmarks overlay image
-    landmarks_image_path = os.path.join("tmp", "landmarks_full.png")
+    # 7) Landmarks overlay image (points-only debug)
+    landmarks_image_path = os.path.join(base_dir, "landmarks_full.png")
     draw_landmarks_image(front_img, landmarks_px, landmarks_image_path)
+
+    # 7b) Landmarks WITH ALL indices
+    landmarks_numbered_image_path = os.path.join(base_dir, "landmarks_full_numbered.png")
+    draw_landmarks_with_indices(front_img, landmarks_px, landmarks_numbered_image_path, scale=1.5)
 
     # 8) Build unified analysis object
     analysis = build_full_analysis(
+        base_dir=base_dir,
+        ID=chat_id,
         base_shape=base_shape,
+        base_shape_measurements_used={
+            "forehead_width": a,
+            "face_height": measurements.get("face_height"),
+            "cheekbone_width": measurements.get("cheekbone_width"),
+            "jaw_width": measurements.get("jaw_width"),
+        },
+        base_shape_rule=base_shape_rule,
         romanian_label=romanian_label,
         earring_tip=earring_tip,
         hairline_shape=hairline_shape,
@@ -295,3 +330,4 @@ async def analyze_full_face_route(raw: str = Body(..., media_type="text/plain"))
     )
 
     return analysis
+

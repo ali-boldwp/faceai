@@ -29,7 +29,7 @@ class FaceLandmarkRequest(BaseModel):
 
 
 class TraitEvidence(BaseModel):
-    measurements_used: List[str] = []
+    measurements_used: Optional[Dict[str, float | None]] = None
     landmark_indices: List[int] = []
     image_url: Optional[str] = None
     notes: Optional[str] = None
