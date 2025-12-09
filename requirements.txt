@@ -69,3 +69,10 @@ typing-inspection==0.4.2
 typing_extensions==4.15.0
 urllib3==2.5.0
 uvicorn==0.38.0
+
+
+# Profile face landmarks (FAN)
+face-alignment==1.4.1
+
+# Ear landmarks (Keras / TF)
+tensorflow>=2.10,<3.0

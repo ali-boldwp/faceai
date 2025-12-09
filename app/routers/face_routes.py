@@ -32,6 +32,10 @@ from app.face_features.forehead_debug import (
     draw_forehead_profile_debug,
 )
 
+from app.services.profile_landmark_extraction import extract_profile_landmarks
+from app.services.ear_landmark_extraction import extract_ear_landmarks
+
+
 
 
 router = APIRouter(prefix="/face", tags=["Face Analysis"])
