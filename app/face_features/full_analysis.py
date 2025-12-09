@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 import os
 from app.services.image import image_to_data_url
 
@@ -143,36 +143,80 @@ def _build_eyebrows_section(
     )
 
 def _build_forehead_section(
-    forehead_shape: Dict,
-    forehead_traits: List[Dict],
+    forehead_shape: Union[Dict[str, Any], str],
+    forehead_traits: List[Union[Dict[str, Any], TraitAnalysis]],
 ) -> SectionAnalysis:
     traits: List[TraitAnalysis] = []
 
-    # Main morphological label
+    # --- Summary label from forehead_shape (dict or str) ---
+    if isinstance(forehead_shape, dict):
+        summary_label = forehead_shape.get("label", "Forehead")
+    else:
+        # classify_forehead_traits now returns a dict,
+        # but this keeps it safe if a plain string is passed
+        summary_label = str(forehead_shape)
+
+    # Optional summary trait (morphological overview)
     traits.append(
         TraitAnalysis(
-            name=forehead_shape.get("label", "Forehead"),
+            name=summary_label,
             present=True,
-            confidence=1.0,
-            explanation=forehead_shape.get("justification", ""),
+            confidence=0.95,
+            explanation="Combined interpretation of forehead height, width and profile shape.",
             evidence=TraitEvidence(
-                measurements_used={}, # ["forehead_width", "jaw_width"]
-                notes="Based on forehead_width / jaw_width ratio.",
+                measurements_used={},   # you can fill this dict with numeric measurements if you want
+                landmark_indices=[],
+                image_url=None,
+                notes=None,
             ),
+            status="computed",
         )
     )
 
-    # Psychological traits from the forehead classifier
-    for t in forehead_traits:
+    # --- Psychological / detailed traits from the forehead classifier ---
+    for t in (forehead_traits or []):
+        # NEW: if it's already a TraitAnalysis (our new classifier output), just append it
+        if isinstance(t, TraitAnalysis):
+            traits.append(t)
+            continue
+
+        # OLD format: dict with 'meaning', 'explanation', 'source', etc.
+        if isinstance(t, dict):
+            name = t.get("name") or t.get("meaning", "Forehead trait")
+            explanation = t.get("explanation", "")
+            source = t.get("source", "Tehnica de citire a feței.docx")
+
+            traits.append(
+                TraitAnalysis(
+                    name=name,
+                    present=bool(t.get("present", True)),
+                    confidence=float(t.get("confidence", 1.0)),
+                    explanation=explanation,
+                    evidence=TraitEvidence(
+                        measurements_used=t.get("measurements_used", {}) or {},
+                        landmark_indices=t.get("landmark_indices", []) or [],
+                        image_url=t.get("image_url"),
+                        notes=source,
+                    ),
+                    status=t.get("status", "computed"),
+                )
+            )
+            continue
+
+        # Fallback for unexpected types (just in case)
         traits.append(
             TraitAnalysis(
-                name=t.get("meaning", "Forehead trait"),
+                name=str(t),
                 present=True,
-                confidence=1.0,
-                explanation=t.get("explanation", ""),
+                confidence=0.5,
+                explanation="Auto-generated forehead trait from unknown format.",
                 evidence=TraitEvidence(
-                    notes=t.get("source", "Tehnica de citire a feței.docx"),
+                    measurements_used={},
+                    landmark_indices=[],
+                    image_url=None,
+                    notes="auto-generated from unknown trait format",
                 ),
+                status="computed",
             )
         )
 
@@ -181,7 +225,6 @@ def _build_forehead_section(
         translation="Fruntea",
         traits=traits,
     )
-
 
 def _build_eyes_section(
     eyes_shape: Dict,
