@@ -33,7 +33,10 @@ from app.face_features.forehead_debug import (
 )
 
 from app.services.profile_landmark_extraction import extract_profile_landmarks
-from app.services.ear_landmark_extraction import extract_ear_landmarks
+try:
+    from app.services.ear_landmark_extraction import extract_ear_landmarks
+except Exception:
+    extract_ear_landmarks = None
 
 
 
