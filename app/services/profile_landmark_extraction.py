@@ -11,7 +11,7 @@ _DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # 2D FAN model, trained for large poses (LS3D-W)
 _fa = face_alignment.FaceAlignment(
-    face_alignment.LandmarksType._2D,
+    face_alignment.LandmarksType.TWO_D,
     device=_DEVICE,
     flip_input=False,
 )
