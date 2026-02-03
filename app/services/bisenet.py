@@ -7,13 +7,38 @@ from torchvision import transforms
 from PIL import Image
 import matplotlib.pyplot as plt
 
-sys.path.append(os.path.abspath("./face-parsing.PyTorch"))
+DEFAULT_FACE_PARSING_DIR = os.path.abspath("./face-parsing.PyTorch")
+DEFAULT_CHECKPOINT = "face-parsing.PyTorch/weights/79999_iter.pth"
 
-from model import BiSeNet
+def _load_bisenet_class(face_parsing_dir: str):
+    if face_parsing_dir not in sys.path:
+        sys.path.append(face_parsing_dir)
+    try:
+        from model import BiSeNet
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "BiSeNet model module not found. Ensure the face-parsing.PyTorch "
+            f"repository is available at {face_parsing_dir} (with model.py) "
+            "or update the FACE_PARSING_DIR environment variable to the correct path."
+        ) from exc
+    return BiSeNet
 
 # Load BiSeNet model
-def load_bisenet(checkpoint='face-parsing.PyTorch/weights/79999_iter.pth', n_classes=19):
-    net = BiSeNet(n_classes=n_classes)
+def load_bisenet(checkpoint: str | None = None, n_classes=19, face_parsing_dir: str | None = None):
+    face_parsing_dir = os.getenv("FACE_PARSING_DIR", face_parsing_dir or DEFAULT_FACE_PARSING_DIR)
+    checkpoint = os.getenv("FACE_PARSING_CHECKPOINT", checkpoint or DEFAULT_CHECKPOINT)
+    if not os.path.exists(checkpoint):
+        raise FileNotFoundError(
+            f"BiSeNet checkpoint not found at {checkpoint}. "
+            "Download the weights and update the checkpoint path."
+        )
+    if not os.path.isdir(face_parsing_dir):
+        raise FileNotFoundError(
+            f"BiSeNet repo directory not found at {face_parsing_dir}. "
+            "Clone face-parsing.PyTorch or set FACE_PARSING_DIR to the correct path."
+        )
+    bisenet_cls = _load_bisenet_class(face_parsing_dir)
+    net = bisenet_cls(n_classes=n_classes)
     net.load_state_dict(torch.load(checkpoint, map_location='cpu', weights_only=False))
     net.eval()
     return net
