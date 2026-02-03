@@ -7,13 +7,30 @@ from torchvision import transforms
 from PIL import Image
 import matplotlib.pyplot as plt
 
-sys.path.append(os.path.abspath("./face-parsing.PyTorch"))
+FACE_PARSING_DIR = os.path.abspath("./face-parsing.PyTorch")
+if FACE_PARSING_DIR not in sys.path:
+    sys.path.append(FACE_PARSING_DIR)
 
-from model import BiSeNet
+def _load_bisenet_class():
+    try:
+        from model import BiSeNet
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "BiSeNet model module not found. Ensure the face-parsing.PyTorch "
+            "repository is available at ./face-parsing.PyTorch (with model.py) "
+            "or update FACE_PARSING_DIR to the correct path."
+        ) from exc
+    return BiSeNet
 
 # Load BiSeNet model
 def load_bisenet(checkpoint='face-parsing.PyTorch/weights/79999_iter.pth', n_classes=19):
-    net = BiSeNet(n_classes=n_classes)
+    if not os.path.exists(checkpoint):
+        raise FileNotFoundError(
+            f"BiSeNet checkpoint not found at {checkpoint}. "
+            "Download the weights and update the checkpoint path."
+        )
+    bisenet_cls = _load_bisenet_class()
+    net = bisenet_cls(n_classes=n_classes)
     net.load_state_dict(torch.load(checkpoint, map_location='cpu', weights_only=False))
     net.eval()
     return net
